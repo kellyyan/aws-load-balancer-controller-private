@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  creationTimestamp: "2025-08-06T02:01:54Z"
+  deletionTimestamp: "2025-08-06T17:44:03Z"
+  labels:
+    kubernetes.io/metadata.name: service-ip-e2e-a6a7fe
+  name: service-ip-e2e-a6a7fe
+  resourceVersion: "6032270"
+  uid: bd11774d-8ee8-423c-bcd1-e8e53f826599
+status:
+  conditions:
+  - lastTransitionTime: "2025-08-06T17:44:08Z"
+    message: All resources successfully discovered
+    reason: ResourcesDiscovered
+    status: "False"
+    type: NamespaceDeletionDiscoveryFailure
+  - lastTransitionTime: "2025-08-06T17:44:08Z"
+    message: All legacy kube types successfully parsed
+    reason: ParsedGroupVersions
+    status: "False"
+    type: NamespaceDeletionGroupVersionParsingFailure
+  - lastTransitionTime: "2025-08-06T17:44:08Z"
+    message: All content successfully deleted, may be waiting on finalization
+    reason: ContentDeleted
+    status: "False"
+    type: NamespaceDeletionContentFailure
+  - lastTransitionTime: "2025-08-06T17:44:08Z"
+    message: 'Some resources are remaining: services. has 1 resource instances'
+    reason: SomeResourcesRemain
+    status: "True"
+    type: NamespaceContentRemaining
+  - lastTransitionTime: "2025-08-06T17:44:08Z"
+    message: 'Some content in the namespace has finalizers remaining: service.k8s.aws/resources
+      in 1 resource instances'
+    reason: SomeFinalizersRemain
+    status: "True"
+    type: NamespaceFinalizersRemaining
+  phase: Terminating

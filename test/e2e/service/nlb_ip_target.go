@@ -12,25 +12,13 @@ import (
 	"time"
 )
 
-const (
-	ResourceTypeELBLoadBalancer = "elasticloadbalancing:loadbalancer"
-)
-
 type NLBIPTestStack struct {
 	resourceStack *resourceStack
 }
 
-func (s *NLBIPTestStack) Deploy(ctx context.Context, f *framework.Framework, svc *corev1.Service, dp *appsv1.Deployment) error {
-	s.resourceStack = NewResourceStack(dp, svc, "service-ip-e2e", false)
+func (s *NLBIPTestStack) Deploy(ctx context.Context, f *framework.Framework, svcs []*corev1.Service, dp *appsv1.Deployment) error {
+	s.resourceStack = NewResourceStack(dp, svcs, "service-ip-e2e", false)
 	return s.resourceStack.Deploy(ctx, f)
-}
-
-func (s *NLBIPTestStack) UpdateServiceAnnotations(ctx context.Context, f *framework.Framework, svcAnnotations map[string]string) error {
-	return s.resourceStack.UpdateServiceAnnotations(ctx, f, svcAnnotations)
-}
-
-func (s *NLBIPTestStack) ScaleDeployment(ctx context.Context, f *framework.Framework, numReplicas int32) error {
-	return s.resourceStack.ScaleDeployment(ctx, f, numReplicas)
 }
 
 func (s *NLBIPTestStack) Cleanup(ctx context.Context, f *framework.Framework) error {
@@ -41,7 +29,11 @@ func (s *NLBIPTestStack) GetLoadBalancerIngressHostName() string {
 	return s.resourceStack.GetLoadBalancerIngressHostname()
 }
 
-func (s *NLBIPTestStack) SendTrafficToLB(ctx context.Context, f *framework.Framework) error {
+func (s *NLBIPTestStack) UpdateServiceAnnotations(ctx context.Context, f *framework.Framework, svcAnnotations map[string]string) error {
+	return s.resourceStack.UpdateServiceAnnotations(ctx, f, svcAnnotations)
+}
+
+func (s *NLBIPTestStack) SendTrafficToLB() error {
 	httpClient := http.Client{Timeout: utils.PollIntervalMedium}
 	protocol := "http"
 	if s.listenerTLS() {
@@ -53,7 +45,7 @@ func (s *NLBIPTestStack) SendTrafficToLB(ctx context.Context, f *framework.Frame
 		}
 	}
 	// Choose the first port for now, TODO: verify all listeners
-	port := s.resourceStack.svc.Spec.Ports[0].Port
+	port := s.resourceStack.createdSVC.Spec.Ports[0].Port
 	noerr := false
 	for i := 0; i < 10; i++ {
 		resp, err := httpClient.Get(fmt.Sprintf("%s://%s:%v/from-tls-client", protocol, s.GetLoadBalancerIngressHostName(), port))
@@ -76,10 +68,6 @@ func (s *NLBIPTestStack) SendTrafficToLB(ctx context.Context, f *framework.Frame
 }
 
 func (s *NLBIPTestStack) listenerTLS() bool {
-	_, ok := s.resourceStack.svc.Annotations["service.beta.kubernetes.io/aws-load-balancer-ssl-cert"]
+	_, ok := s.resourceStack.createdSVC.Annotations["service.beta.kubernetes.io/aws-load-balancer-ssl-cert"]
 	return ok
-}
-
-func (s *NLBIPTestStack) targetGroupTLS() bool {
-	return false
 }

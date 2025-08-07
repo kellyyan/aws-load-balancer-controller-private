@@ -13,19 +13,20 @@ import (
 )
 
 const (
-	appContainerPort   = 80
-	defaultNumReplicas = 3
-	defaultName        = "instance-e2e"
+	defaultName = "instance-e2e"
 )
 
 type NLBInstanceTestStack struct {
 	resourceStack *resourceStack
 }
 
-func (s *NLBInstanceTestStack) Deploy(ctx context.Context, f *framework.Framework, svcAnnotations map[string]string) error {
+func (s *NLBInstanceTestStack) Deploy(ctx context.Context, f *framework.Framework, svcAnnotations map[string]string, svcs []*corev1.Service) error {
 	dp := s.buildDeploymentSpec(f.Options.TestImageRegistry)
-	svc := s.buildServiceSpec(ctx, svcAnnotations)
-	s.resourceStack = NewResourceStack(dp, svc, "service-instance-e2e", false)
+	if svcs == nil {
+		svc := s.buildServiceSpec(svcAnnotations)
+		svcs = append(svcs, svc)
+	}
+	s.resourceStack = NewResourceStack(dp, svcs, "service-instance-e2e", false)
 
 	return s.resourceStack.Deploy(ctx, f)
 }
@@ -121,7 +122,7 @@ func (s *NLBInstanceTestStack) buildDeploymentSpec(testImageRegistry string) *ap
 	}
 }
 
-func (s *NLBInstanceTestStack) buildServiceSpec(ctx context.Context, annotations map[string]string) *corev1.Service {
+func (s *NLBInstanceTestStack) buildServiceSpec(annotations map[string]string) *corev1.Service {
 	labels := map[string]string{
 		"app.kubernetes.io/name":     "multi-port",
 		"app.kubernetes.io/instance": defaultName,

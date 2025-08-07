@@ -118,9 +118,35 @@ func (t *defaultModelBuildTask) buildListenerSpec(ctx context.Context, port core
 	if err != nil {
 		return elbv2model.ListenerSpec{}, err
 	}
-	targetGroup, err := t.buildTargetGroup(ctx, port, tgProtocol, scheme)
-	if err != nil {
-		return elbv2model.ListenerSpec{}, err
+
+	var defaultActions []elbv2model.Action
+	annotationExists, actionCfg, err := t.buildActionConfigViaAnnotation(t.service.Annotations, listenerProtocol, port.Port)
+	// If the actions annotation exists, build the enhanced backend
+	if annotationExists {
+		if err != nil {
+			return elbv2model.ListenerSpec{}, err
+		}
+
+		// Load the backend services into backendServices
+		err := t.enhancedBackendBuilder.Build(ctx, t.service, actionCfg, t.backendServices)
+		if err != nil {
+			return elbv2model.ListenerSpec{}, err
+		}
+
+		// Build the target groups
+		targetGroups, err := t.buildTargetGroupTuples(ctx, t.service, listenerProtocol, port, tgProtocol, actionCfg, scheme)
+		if err != nil {
+			return elbv2model.ListenerSpec{}, err
+		}
+
+		// Build the default action
+		defaultActions = t.buildListenerDefaultActionsViaAnnotation(actionCfg, targetGroups)
+	} else {
+		targetGroup, err := t.buildTargetGroup(ctx, t.service, t.service.Annotations, port, tgProtocol, scheme)
+		if err != nil {
+			return elbv2model.ListenerSpec{}, err
+		}
+		defaultActions = t.buildListenerDefaultActions(ctx, targetGroup)
 	}
 
 	alpnPolicy, err := t.buildListenerALPNPolicy(ctx, listenerProtocol, tgProtocol)
@@ -135,7 +161,6 @@ func (t *defaultModelBuildTask) buildListenerSpec(ctx context.Context, port core
 		certificates = cfg.certificates
 	}
 
-	defaultActions := t.buildListenerDefaultActions(ctx, targetGroup)
 	lsAttributes, attributesErr := t.buildListenerAttributes(ctx, t.service.Annotations, port.Port, listenerProtocol)
 	if attributesErr != nil {
 		return elbv2model.ListenerSpec{}, attributesErr
@@ -165,6 +190,43 @@ func (t *defaultModelBuildTask) buildListenerDefaultActions(_ context.Context, t
 				},
 			},
 		},
+	}
+}
+
+// Parse the actions annotation, if it exists
+func (t *defaultModelBuildTask) buildActionConfigViaAnnotation(svcAnnotations map[string]string, protocol elbv2model.Protocol, port int32) (bool, Action, error) {
+	actionCfg := Action{}
+	annotationKey := fmt.Sprintf("actions.%v-%d", protocol, port)
+	annotationExists, err := t.annotationParser.ParseJSONAnnotation(annotationKey, &actionCfg, svcAnnotations)
+	if !annotationExists {
+		return annotationExists, actionCfg, nil
+	}
+	// If there's an error, return it
+	if err != nil {
+		return annotationExists, Action{}, err
+	}
+	// Validate the actionCfg
+	if err := actionCfg.validate(); err != nil {
+		return annotationExists, Action{}, err
+	}
+	return annotationExists, actionCfg, nil
+}
+
+// Builds listener default action config using the annotation, supports forwarding to weighted target groups
+func (t *defaultModelBuildTask) buildListenerDefaultActionsViaAnnotation(actionCfg Action, targetGroupTuples []elbv2model.TargetGroupTuple) []elbv2model.Action {
+	var stickinessCfg *elbv2model.TargetGroupStickinessConfig
+	if actionCfg.ForwardConfig.TargetGroupStickinessConfig != nil {
+		stickinessCfg = &elbv2model.TargetGroupStickinessConfig{
+			Enabled: actionCfg.ForwardConfig.TargetGroupStickinessConfig.Enabled,
+		}
+	}
+	return []elbv2model.Action{
+		{
+			Type: elbv2model.ActionTypeForward,
+			ForwardConfig: &elbv2model.ForwardActionConfig{
+				TargetGroups:                targetGroupTuples,
+				TargetGroupStickinessConfig: stickinessCfg,
+			}},
 	}
 }
 

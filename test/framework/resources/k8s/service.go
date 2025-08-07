@@ -44,7 +44,6 @@ func (m *defaultServiceManager) WaitUntilServiceActive(ctx context.Context, svc 
 		}
 		return false, nil
 	}, ctx.Done())
-
 }
 
 func (m *defaultServiceManager) WaitUntilServiceDeleted(ctx context.Context, svc *corev1.Service) error {

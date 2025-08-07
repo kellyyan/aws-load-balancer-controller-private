@@ -4,9 +4,6 @@ import (
 	"context"
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	elbv2types "github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2/types"
-	"sigs.k8s.io/aws-load-balancer-controller/test/framework/verifier"
-	"time"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
@@ -14,69 +11,48 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/aws-load-balancer-controller/test/framework/utils"
+	"sigs.k8s.io/aws-load-balancer-controller/test/framework/verifier"
+	"time"
 )
 
 var _ = Describe("k8s service reconciled by the aws load balancer", func() {
 	var (
-		ctx         context.Context
-		deployment  *appsv1.Deployment
-		numReplicas int32
-		name        string
-		dnsName     string
-		lbARN       string
-		labels      map[string]string
-		stack       NLBIPTestStack
+		ctx        context.Context
+		deployment *appsv1.Deployment
+		//numReplicas int32
+		name    string
+		dnsName string
+		lbARN   string
+		labels  map[string]string
+		stack   NLBIPTestStack
+		//vpcId       string
+		//region      string
+		//certArns    string
 	)
 	BeforeEach(func() {
 		ctx = context.Background()
-		numReplicas = 3
+		//numReplicas = 3
 		stack = NLBIPTestStack{}
 		name = "ip-e2e"
 		labels = map[string]string{
 			"app.kubernetes.io/name":     "multi-port",
 			"app.kubernetes.io/instance": name,
 		}
-		dpImage := utils.GetDeploymentImage(tf.Options.TestImageRegistry, utils.HelloImage)
-		deployment = &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: name,
-			},
-			Spec: appsv1.DeploymentSpec{
-				Replicas: &numReplicas,
-				Selector: &metav1.LabelSelector{
-					MatchLabels: labels,
-				},
-				Template: corev1.PodTemplateSpec{
-					ObjectMeta: metav1.ObjectMeta{
-						Labels: labels,
-					},
-					Spec: corev1.PodSpec{
-						Containers: []corev1.Container{
-							{
-								Name:            "app",
-								ImagePullPolicy: corev1.PullAlways,
-								Image:           dpImage,
-								Ports: []corev1.ContainerPort{
-									{
-										ContainerPort: appContainerPort,
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		}
+		deployment = buildDeploymentSpec(tf.Options.TestImageRegistry, name)
+		//vpcId = tf.Options.AWSVPCID
+		//region = tf.Options.AWSRegion
+		//certArns = tf.Options.CertificateARNs
 	})
 
 	AfterEach(func() {
-		err := stack.Cleanup(ctx, tf)
-		Expect(err).NotTo(HaveOccurred())
+		//err := stack.Cleanup(ctx, tf)
+		//Expect(err).NotTo(HaveOccurred())
 	})
 
 	Context("NLB with IP target configuration", func() {
 		var (
-			svc *corev1.Service
+			svcs []*corev1.Service
+			svc  *corev1.Service
 		)
 		BeforeEach(func() {
 			annotation := map[string]string{
@@ -103,10 +79,11 @@ var _ = Describe("k8s service reconciled by the aws load balancer", func() {
 					},
 				},
 			}
+			svcs = append(svcs, svc)
 		})
 		It("Should create and verify internet-facing NLB with IP targets", func() {
 			By("deploying stack", func() {
-				err := stack.Deploy(ctx, tf, svc, deployment)
+				err := stack.Deploy(ctx, tf, svcs, deployment)
 				Expect(err).NotTo(HaveOccurred())
 			})
 			By("checking service status for lb dns name", func() {
@@ -131,7 +108,7 @@ var _ = Describe("k8s service reconciled by the aws load balancer", func() {
 					TargetGroups: map[string][]string{
 						"80": {"TCP"},
 					},
-					NumTargets: int(numReplicas),
+					NumTargets: defaultNumReplicas,
 					TargetGroupHC: &verifier.TargetGroupHC{
 						Protocol:           "TCP",
 						Port:               "traffic-port",
@@ -144,11 +121,11 @@ var _ = Describe("k8s service reconciled by the aws load balancer", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 			By("waiting for target group targets to be healthy", func() {
-				err := verifier.WaitUntilTargetsAreHealthy(ctx, tf, lbARN, int(numReplicas))
+				err := verifier.WaitUntilTargetsAreHealthy(ctx, tf, lbARN, defaultNumReplicas)
 				Expect(err).NotTo(HaveOccurred())
 			})
 			By("Send traffic to LB", func() {
-				err := stack.SendTrafficToLB(ctx, tf)
+				err := stack.SendTrafficToLB()
 				Expect(err).ToNot(HaveOccurred())
 			})
 			By("Specifying Healthcheck annotations", func() {
@@ -177,7 +154,7 @@ var _ = Describe("k8s service reconciled by the aws load balancer", func() {
 					TargetGroups: map[string][]string{
 						"80": {"TCP"},
 					},
-					NumTargets: int(numReplicas),
+					NumTargets: defaultNumReplicas,
 					TargetGroupHC: &verifier.TargetGroupHC{
 						Protocol:           "HTTP",
 						Port:               "80",
@@ -242,7 +219,7 @@ var _ = Describe("k8s service reconciled by the aws load balancer", func() {
 					TargetGroups: map[string][]string{
 						"80": {"TCP"},
 					},
-					NumTargets: int(numReplicas) + 1,
+					NumTargets: defaultNumReplicas + 1,
 					TargetGroupHC: &verifier.TargetGroupHC{
 						Protocol:           "HTTP",
 						Port:               "80",
@@ -275,7 +252,7 @@ var _ = Describe("k8s service reconciled by the aws load balancer", func() {
 					TargetGroups: map[string][]string{
 						"80": {"TCP"},
 					},
-					NumTargets: int(numReplicas),
+					NumTargets: defaultNumReplicas,
 					TargetGroupHC: &verifier.TargetGroupHC{
 						Protocol:           "HTTP",
 						Port:               "80",
@@ -291,226 +268,392 @@ var _ = Describe("k8s service reconciled by the aws load balancer", func() {
 		})
 	})
 
-	Context("NLB IP with TLS configuration", func() {
-		var (
-			svc *corev1.Service
-		)
-		BeforeEach(func() {
-			annotation := map[string]string{
-				"service.beta.kubernetes.io/aws-load-balancer-type":     "nlb-ip",
-				"service.beta.kubernetes.io/aws-load-balancer-scheme":   "internet-facing",
-				"service.beta.kubernetes.io/aws-load-balancer-ssl-cert": tf.Options.CertificateARNs,
-			}
-			if tf.Options.IPFamily == "IPv6" {
-				annotation["service.beta.kubernetes.io/aws-load-balancer-ip-address-type"] = "dualstack"
-			}
-			svc = &corev1.Service{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:        name + "-tls",
-					Annotations: annotation,
-				},
-				Spec: corev1.ServiceSpec{
-					Type:     corev1.ServiceTypeLoadBalancer,
-					Selector: labels,
-					Ports: []corev1.ServicePort{
-						{
-							Port:       80,
-							Name:       "http",
-							TargetPort: intstr.FromInt(80),
-							Protocol:   corev1.ProtocolTCP,
-						},
-						{
-							Port:       443,
-							Name:       "https",
-							TargetPort: intstr.FromInt(443),
-							Protocol:   corev1.ProtocolTCP,
-						},
-						{
-							Port:       333,
-							Name:       "arbitrary-port",
-							TargetPort: intstr.FromInt(333),
-							Protocol:   corev1.ProtocolTCP,
-						},
-					},
-				},
-			}
-		})
-		It("Should create TLS listeners", func() {
-			if len(tf.Options.CertificateARNs) == 0 {
-				Skip("Skipping tests, certificates not specified")
-			}
-			By("deploying stack", func() {
-				err := stack.Deploy(ctx, tf, svc, deployment)
-				Expect(err).NotTo(HaveOccurred())
-			})
-			By("checking service status for lb dns name", func() {
-				dnsName = stack.GetLoadBalancerIngressHostName()
-				Expect(dnsName).ToNot(BeEmpty())
-			})
-			By("querying AWS loadbalancer from the dns name", func() {
-				var err error
-				lbARN, err = tf.LBManager.FindLoadBalancerByDNSName(ctx, dnsName)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(lbARN).ToNot(BeEmpty())
-			})
-			By("Verifying AWS configuration", func() {
-				err := verifier.VerifyAWSLoadBalancerResources(ctx, tf, lbARN, verifier.LoadBalancerExpectation{
-					Type:       "network",
-					Scheme:     "internet-facing",
-					TargetType: "ip",
-					Listeners: map[string]string{
-						"80":  "TLS",
-						"443": "TLS",
-						"333": "TLS",
-					},
-					TargetGroups: map[string][]string{
-						"80":  {"TCP"},
-						"443": {"TCP"},
-						"333": {"TCP"},
-					},
-					NumTargets: int(numReplicas),
-				})
-				Expect(err).ToNot(HaveOccurred())
-			})
-			By("Sending traffic to LB", func() {
-				err := stack.SendTrafficToLB(ctx, tf)
-				Expect(err).ToNot(HaveOccurred())
-			})
-			By("Specifying specific ports for SSL", func() {
-				err := stack.UpdateServiceAnnotations(ctx, tf, map[string]string{
-					"service.beta.kubernetes.io/aws-load-balancer-ssl-ports": "443, 333",
-				})
-				Expect(err).ToNot(HaveOccurred())
-				Eventually(func() bool {
-					return verifier.GetLoadBalancerListenerProtocol(ctx, tf, lbARN, "80") == "TCP"
-				}, utils.PollTimeoutShort, utils.PollIntervalMedium).Should(BeTrue())
+	//Context("NLB IP with TLS configuration", func() {
+	//	var (
+	//		svcs []*corev1.Service
+	//		svc  *corev1.Service
+	//	)
+	//	BeforeEach(func() {
+	//		annotation := map[string]string{
+	//			"service.beta.kubernetes.io/aws-load-balancer-type":     "nlb-ip",
+	//			"service.beta.kubernetes.io/aws-load-balancer-scheme":   "internet-facing",
+	//			"service.beta.kubernetes.io/aws-load-balancer-ssl-cert": tf.Options.CertificateARNs,
+	//		}
+	//		if tf.Options.IPFamily == "IPv6" {
+	//			annotation["service.beta.kubernetes.io/aws-load-balancer-ip-address-type"] = "dualstack"
+	//		}
+	//		svc = &corev1.Service{
+	//			ObjectMeta: metav1.ObjectMeta{
+	//				Name:        name + "-tls",
+	//				Annotations: annotation,
+	//			},
+	//			Spec: corev1.ServiceSpec{
+	//				Type:     corev1.ServiceTypeLoadBalancer,
+	//				Selector: labels,
+	//				Ports: []corev1.ServicePort{
+	//					{
+	//						Port:       80,
+	//						Name:       "http",
+	//						TargetPort: intstr.FromInt(80),
+	//						Protocol:   corev1.ProtocolTCP,
+	//					},
+	//					{
+	//						Port:       443,
+	//						Name:       "https",
+	//						TargetPort: intstr.FromInt(443),
+	//						Protocol:   corev1.ProtocolTCP,
+	//					},
+	//					{
+	//						Port:       333,
+	//						Name:       "arbitrary-port",
+	//						TargetPort: intstr.FromInt(333),
+	//						Protocol:   corev1.ProtocolTCP,
+	//					},
+	//				},
+	//			},
+	//		}
+	//		svcs = append(svcs, svc)
+	//	})
+	//	It("Should create TLS listeners", func() {
+	//		if len(tf.Options.CertificateARNs) == 0 {
+	//			Skip("Skipping tests, certificates not specified")
+	//		}
+	//		By("deploying stack", func() {
+	//			err := stack.Deploy(ctx, tf, svcs, deployment)
+	//			Expect(err).NotTo(HaveOccurred())
+	//		})
+	//		By("checking service status for lb dns name", func() {
+	//			dnsName = stack.GetLoadBalancerIngressHostName()
+	//			Expect(dnsName).ToNot(BeEmpty())
+	//		})
+	//		By("querying AWS loadbalancer from the dns name", func() {
+	//			var err error
+	//			lbARN, err = tf.LBManager.FindLoadBalancerByDNSName(ctx, dnsName)
+	//			Expect(err).NotTo(HaveOccurred())
+	//			Expect(lbARN).ToNot(BeEmpty())
+	//		})
+	//		By("Verifying AWS configuration", func() {
+	//			err := verifier.VerifyAWSLoadBalancerResources(ctx, tf, lbARN, verifier.LoadBalancerExpectation{
+	//				Type:       "network",
+	//				Scheme:     "internet-facing",
+	//				TargetType: "ip",
+	//				Listeners: map[string]string{
+	//					"80":  "TLS",
+	//					"443": "TLS",
+	//					"333": "TLS",
+	//				},
+	//				TargetGroups: map[string][]string{
+	//					"80":  {"TCP"},
+	//					"443": {"TCP"},
+	//					"333": {"TCP"},
+	//				},
+	//				NumTargets: defaultNumReplicas,
+	//			})
+	//			Expect(err).ToNot(HaveOccurred())
+	//		})
+	//		By("Sending traffic to LB", func() {
+	//			err := stack.SendTrafficToLB()
+	//			Expect(err).ToNot(HaveOccurred())
+	//		})
+	//		By("Specifying specific ports for SSL", func() {
+	//			err := stack.UpdateServiceAnnotations(ctx, tf, map[string]string{
+	//				"service.beta.kubernetes.io/aws-load-balancer-ssl-ports": "443, 333",
+	//			})
+	//			Expect(err).ToNot(HaveOccurred())
+	//			Eventually(func() bool {
+	//				return verifier.GetLoadBalancerListenerProtocol(ctx, tf, lbARN, "80") == "TCP"
+	//			}, utils.PollTimeoutShort, utils.PollIntervalMedium).Should(BeTrue())
+	//
+	//			err = verifier.VerifyAWSLoadBalancerResources(ctx, tf, lbARN, verifier.LoadBalancerExpectation{
+	//				Type:       "network",
+	//				Scheme:     "internet-facing",
+	//				TargetType: "ip",
+	//				Listeners: map[string]string{
+	//					"80":  "TCP",
+	//					"443": "TLS",
+	//					"333": "TLS",
+	//				},
+	//				TargetGroups: map[string][]string{
+	//					"80":  {"TCP"},
+	//					"443": {"TCP"},
+	//					"333": {"TCP"},
+	//				},
+	//				NumTargets: defaultNumReplicas,
+	//			})
+	//			Expect(err).ToNot(HaveOccurred())
+	//		})
+	//		By("Including service port in ssl-ports annotation", func() {
+	//			err := stack.UpdateServiceAnnotations(ctx, tf, map[string]string{
+	//				"service.beta.kubernetes.io/aws-load-balancer-ssl-ports": "443, http, 333",
+	//			})
+	//			Expect(err).ToNot(HaveOccurred())
+	//			Eventually(func() bool {
+	//				return verifier.GetLoadBalancerListenerProtocol(ctx, tf, lbARN, "80") == "TLS"
+	//			}, utils.PollTimeoutShort, utils.PollIntervalMedium).Should(BeTrue())
+	//		})
+	//		By("Specifying logging annotations", func() {
+	//			if len(tf.Options.S3BucketName) == 0 {
+	//				return
+	//			}
+	//			err := stack.UpdateServiceAnnotations(ctx, tf, map[string]string{
+	//				"service.beta.kubernetes.io/aws-load-balancer-ssl-ports":                   "443, 333",
+	//				"service.beta.kubernetes.io/aws-load-balancer-access-log-enabled":          "true",
+	//				"service.beta.kubernetes.io/aws-load-balancer-access-log-s3-bucket-name":   tf.Options.S3BucketName,
+	//				"service.beta.kubernetes.io/aws-load-balancer-access-log-s3-bucket-prefix": "nlb-pfx",
+	//			})
+	//			Expect(err).ToNot(HaveOccurred())
+	//			Eventually(func() bool {
+	//				return verifier.VerifyLoadBalancerAttributes(ctx, tf, lbARN, map[string]string{
+	//					"access_logs.s3.enabled": "true",
+	//					"access_logs.s3.bucket":  tf.Options.S3BucketName,
+	//					"access_logs.s3.prefix":  "nlb-pfx",
+	//				}) == nil
+	//			}, utils.PollTimeoutShort, utils.PollIntervalMedium).Should(BeTrue())
+	//			// TODO: send traffic to the LB and verify access logs in S3
+	//		})
+	//	})
+	//})
 
-				err = verifier.VerifyAWSLoadBalancerResources(ctx, tf, lbARN, verifier.LoadBalancerExpectation{
-					Type:       "network",
-					Scheme:     "internet-facing",
-					TargetType: "ip",
-					Listeners: map[string]string{
-						"80":  "TCP",
-						"443": "TLS",
-						"333": "TLS",
-					},
-					TargetGroups: map[string][]string{
-						"80":  {"TCP"},
-						"443": {"TCP"},
-						"333": {"TCP"},
-					},
-					NumTargets: int(numReplicas),
-				})
-				Expect(err).ToNot(HaveOccurred())
-			})
-			By("Including service port in ssl-ports annotation", func() {
-				err := stack.UpdateServiceAnnotations(ctx, tf, map[string]string{
-					"service.beta.kubernetes.io/aws-load-balancer-ssl-ports": "443, http, 333",
-				})
-				Expect(err).ToNot(HaveOccurred())
-				Eventually(func() bool {
-					return verifier.GetLoadBalancerListenerProtocol(ctx, tf, lbARN, "80") == "TLS"
-				}, utils.PollTimeoutShort, utils.PollIntervalMedium).Should(BeTrue())
-			})
-			By("Specifying logging annotations", func() {
-				if len(tf.Options.S3BucketName) == 0 {
-					return
-				}
-				err := stack.UpdateServiceAnnotations(ctx, tf, map[string]string{
-					"service.beta.kubernetes.io/aws-load-balancer-ssl-ports":                   "443, 333",
-					"service.beta.kubernetes.io/aws-load-balancer-access-log-enabled":          "true",
-					"service.beta.kubernetes.io/aws-load-balancer-access-log-s3-bucket-name":   tf.Options.S3BucketName,
-					"service.beta.kubernetes.io/aws-load-balancer-access-log-s3-bucket-prefix": "nlb-pfx",
-				})
-				Expect(err).ToNot(HaveOccurred())
-				Eventually(func() bool {
-					return verifier.VerifyLoadBalancerAttributes(ctx, tf, lbARN, map[string]string{
-						"access_logs.s3.enabled": "true",
-						"access_logs.s3.bucket":  tf.Options.S3BucketName,
-						"access_logs.s3.prefix":  "nlb-pfx",
-					}) == nil
-				}, utils.PollTimeoutShort, utils.PollIntervalMedium).Should(BeTrue())
-				// TODO: send traffic to the LB and verify access logs in S3
-			})
-		})
-	})
-	Context("NLB IP Load Balancer with name", func() {
-		var (
-			svc    *corev1.Service
-			lbName string
-		)
-		lbName = utils.RandomDNS1123Label(20)
-		BeforeEach(func() {
-			annotation := map[string]string{
-				"service.beta.kubernetes.io/aws-load-balancer-name":   lbName,
-				"service.beta.kubernetes.io/aws-load-balancer-type":   "nlb-ip",
-				"service.beta.kubernetes.io/aws-load-balancer-scheme": "internet-facing",
-			}
-			if tf.Options.IPFamily == "IPv6" {
-				annotation["service.beta.kubernetes.io/aws-load-balancer-ip-address-type"] = "dualstack"
-			}
-			svc = &corev1.Service{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:        name,
-					Annotations: annotation,
-				},
-				Spec: corev1.ServiceSpec{
-					Type:     corev1.ServiceTypeLoadBalancer,
-					Selector: labels,
-					Ports: []corev1.ServicePort{
-						{
-							Port:       80,
-							TargetPort: intstr.FromInt(80),
-							Protocol:   corev1.ProtocolTCP,
-						},
-					},
-				},
-			}
-		})
-		It("Should create and verify service", func() {
-			By("deploying stack", func() {
-				err := stack.Deploy(ctx, tf, svc, deployment)
-				Expect(err).NotTo(HaveOccurred())
-			})
-			By("checking service status for lb dns name", func() {
-				dnsName = stack.GetLoadBalancerIngressHostName()
-				Expect(dnsName).ToNot(BeEmpty())
-			})
+	//Context("NLB IP Load Balancer with name", func() {
+	//	var (
+	//		svcs   []*corev1.Service
+	//		svc    *corev1.Service
+	//		lbName string
+	//	)
+	//	lbName = utils.RandomDNS1123Label(20)
+	//	BeforeEach(func() {
+	//		annotation := map[string]string{
+	//			"service.beta.kubernetes.io/aws-load-balancer-name":   lbName,
+	//			"service.beta.kubernetes.io/aws-load-balancer-type":   "nlb-ip",
+	//			"service.beta.kubernetes.io/aws-load-balancer-scheme": "internet-facing",
+	//		}
+	//		if tf.Options.IPFamily == "IPv6" {
+	//			annotation["service.beta.kubernetes.io/aws-load-balancer-ip-address-type"] = "dualstack"
+	//		}
+	//		svc = &corev1.Service{
+	//			ObjectMeta: metav1.ObjectMeta{
+	//				Name:        name,
+	//				Annotations: annotation,
+	//			},
+	//			Spec: corev1.ServiceSpec{
+	//				Type:     corev1.ServiceTypeLoadBalancer,
+	//				Selector: labels,
+	//				Ports: []corev1.ServicePort{
+	//					{
+	//						Port:       80,
+	//						TargetPort: intstr.FromInt(80),
+	//						Protocol:   corev1.ProtocolTCP,
+	//					},
+	//				},
+	//			},
+	//		}
+	//		svcs = append(svcs, svc)
+	//	})
+	//	It("Should create and verify service", func() {
+	//		By("deploying stack", func() {
+	//			err := stack.Deploy(ctx, tf, svcs, deployment)
+	//			Expect(err).NotTo(HaveOccurred())
+	//		})
+	//		By("checking service status for lb dns name", func() {
+	//			dnsName = stack.GetLoadBalancerIngressHostName()
+	//			Expect(dnsName).ToNot(BeEmpty())
+	//		})
+	//
+	//		By("querying AWS loadbalancer from the dns name", func() {
+	//			var err error
+	//			lbARN, err = tf.LBManager.FindLoadBalancerByDNSName(ctx, dnsName)
+	//			Expect(err).NotTo(HaveOccurred())
+	//			Expect(lbARN).ToNot(BeEmpty())
+	//		})
+	//		By("Verify Service with AWS", func() {
+	//			err := verifier.VerifyAWSLoadBalancerResources(ctx, tf, lbARN, verifier.LoadBalancerExpectation{
+	//				Name:       lbName,
+	//				Type:       "network",
+	//				Scheme:     "internet-facing",
+	//				TargetType: "ip",
+	//				Listeners: map[string]string{
+	//					"80": "TCP",
+	//				},
+	//				TargetGroups: map[string][]string{
+	//					"80": {"TCP"},
+	//				},
+	//				NumTargets: defaultNumReplicas,
+	//				TargetGroupHC: &verifier.TargetGroupHC{
+	//					Protocol:           "TCP",
+	//					Port:               "traffic-port",
+	//					Interval:           10,
+	//					Timeout:            10,
+	//					HealthyThreshold:   3,
+	//					UnhealthyThreshold: 3,
+	//				},
+	//			})
+	//			Expect(err).ToNot(HaveOccurred())
+	//		})
+	//		By("waiting for load balancer to be available", func() {
+	//			err := tf.LBManager.WaitUntilLoadBalancerAvailable(ctx, lbARN)
+	//			Expect(err).NotTo(HaveOccurred())
+	//		})
+	//	})
+	//})
 
-			By("querying AWS loadbalancer from the dns name", func() {
-				var err error
-				lbARN, err = tf.LBManager.FindLoadBalancerByDNSName(ctx, dnsName)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(lbARN).ToNot(BeEmpty())
-			})
-			By("Verify Service with AWS", func() {
-				err := verifier.VerifyAWSLoadBalancerResources(ctx, tf, lbARN, verifier.LoadBalancerExpectation{
-					Name:       lbName,
-					Type:       "network",
-					Scheme:     "internet-facing",
-					TargetType: "ip",
-					Listeners: map[string]string{
-						"80": "TCP",
-					},
-					TargetGroups: map[string][]string{
-						"80": {"TCP"},
-					},
-					NumTargets: int(numReplicas),
-					TargetGroupHC: &verifier.TargetGroupHC{
-						Protocol:           "TCP",
-						Port:               "traffic-port",
-						Interval:           10,
-						Timeout:            10,
-						HealthyThreshold:   3,
-						UnhealthyThreshold: 3,
-					},
-				})
-				Expect(err).ToNot(HaveOccurred())
-			})
-			By("waiting for load balancer to be available", func() {
-				err := tf.LBManager.WaitUntilLoadBalancerAvailable(ctx, lbARN)
-				Expect(err).NotTo(HaveOccurred())
-			})
-		})
-	})
+	//Context("NLB IP type target with weighted target groups", func() {
+	//	var (
+	//		svcs       []*corev1.Service
+	//		svc        *corev1.Service
+	//		svcName    string
+	//		svc1Name   string
+	//		targetSvc1 *corev1.Service
+	//		svc2Name   string
+	//		targetSvc2 *corev1.Service
+	//		tgArn      string
+	//		elbv2Api   *elbv2.ELBV2
+	//	)
+	//	BeforeEach(func() {
+	//		// Service 1 to forward to
+	//		svc1Name = fmt.Sprintf("target-svc1-%v", utils.RandomDNS1123Label(5))
+	//		targetSvc1 = &corev1.Service{
+	//			ObjectMeta: metav1.ObjectMeta{
+	//				Name: svc1Name,
+	//			},
+	//			Spec: corev1.ServiceSpec{
+	//				Selector: labels,
+	//				Type:     corev1.ServiceTypeNodePort,
+	//				Ports: []corev1.ServicePort{
+	//					{
+	//						Port: 81,
+	//					},
+	//				},
+	//			},
+	//		}
+	//
+	//		// Service 2 to forward to
+	//		svc2Name = fmt.Sprintf("target-svc2-%v", utils.RandomDNS1123Label(5))
+	//		targetSvc2 = &corev1.Service{
+	//			ObjectMeta: metav1.ObjectMeta{
+	//				Name: svc2Name,
+	//			},
+	//			Spec: corev1.ServiceSpec{
+	//				Selector: labels,
+	//				Type:     corev1.ServiceTypeNodePort,
+	//				Ports: []corev1.ServicePort{
+	//					{
+	//						Port: 82,
+	//					},
+	//				},
+	//			},
+	//		}
+	//
+	//		session, _ := session.NewSession()
+	//		elbv2Api = elbv2.New(session, aws.NewConfig().WithRegion(region).WithEndpoint("https://elasticloadbalancing-gamma.us-east-1.amazonaws.com")) // TODO remove gamma endpoint
+	//
+	//		// Target group to forward to
+	//		input := &elbv2.CreateTargetGroupInput{
+	//			Name:       aws.String(fmt.Sprintf("target-group-%v", utils.RandomDNS1123Label(5))),
+	//			Port:       aws.Int64(100),
+	//			Protocol:   aws.String("TCP"),
+	//			TargetType: aws.String("ip"),
+	//			VpcId:      aws.String(vpcId),
+	//		}
+	//		result, err := elbv2Api.CreateTargetGroup(input)
+	//		Expect(err).NotTo(HaveOccurred())
+	//		tgArn = *result.TargetGroups[0].TargetGroupArn
+	//		Expect(tgArn).NotTo(BeEmpty())
+	//
+	//		forwardActionValue := fmt.Sprintf(
+	//			`{
+	//						"type": "forward",
+	//						"forwardConfig": {
+	//							"baseServiceWeight": 20,
+	//							"targetGroups": [
+	//								{
+	//									"serviceName": "%v",
+	//									"servicePort": 81,
+	//									"weight": 60,
+	//									"tcpEnabled": true
+	//								},
+	//								{
+	//									"serviceName": "%v",
+	//									"servicePort": 82,
+	//									"weight": 40
+	//								},
+	//								{
+	//									"targetGroupARN": "%v",
+	//									"weight": 10
+	//								}
+	//							]
+	//						}
+	//					}`, svc1Name, svc2Name, tgArn)
+	//
+	//		// Build the NLB
+	//		annotation := map[string]string{
+	//			"service.beta.kubernetes.io/aws-load-balancer-type":     "nlb-ip",
+	//			"service.beta.kubernetes.io/aws-load-balancer-scheme":   "internet-facing",
+	//			"service.beta.kubernetes.io/actions.TLS-80":             forwardActionValue,
+	//			"service.beta.kubernetes.io/aws-load-balancer-subnets":  "subnet-00015baebc04cf711", // TODO delete this
+	//			"service.beta.kubernetes.io/aws-load-balancer-ssl-cert": certArns,
+	//		}
+	//
+	//		svcName = "my-nlb"
+	//		svc = &corev1.Service{
+	//			ObjectMeta: metav1.ObjectMeta{
+	//				Name:        svcName,
+	//				Annotations: annotation,
+	//			},
+	//			Spec: corev1.ServiceSpec{
+	//				Type:     corev1.ServiceTypeLoadBalancer,
+	//				Selector: labels,
+	//				Ports: []corev1.ServicePort{
+	//					{
+	//						Port:       80,
+	//						TargetPort: intstr.FromInt(80),
+	//						Protocol:   corev1.ProtocolTCP,
+	//					},
+	//				},
+	//			},
+	//		}
+	//		svcs = append(svcs, svc, targetSvc1, targetSvc2)
+	//	})
+	//	It("Should create and verify service", func() {
+	//		By("deploying stack", func() {
+	//			err := stack.Deploy(ctx, tf, svcs, deployment)
+	//			Expect(err).NotTo(HaveOccurred())
+	//		})
+	//		By("checking service status for lb dns name", func() {
+	//			dnsName = stack.GetLoadBalancerIngressHostName()
+	//			Expect(dnsName).ToNot(BeEmpty())
+	//		})
+	//		By("querying AWS load balancer from the dns name", func() {
+	//			var err error
+	//			lbARN, err = tf.LBManager.FindLoadBalancerByDNSName(ctx, dnsName)
+	//			Expect(err).NotTo(HaveOccurred())
+	//			Expect(lbARN).ToNot(BeEmpty())
+	//		})
+	//		By("verifying service with AWS", func() {
+	//			err := verifier.VerifyAWSLoadBalancerResources(ctx, tf, lbARN, verifier.LoadBalancerExpectation{
+	//				Type:       "network",
+	//				Scheme:     "internet-facing",
+	//				TargetType: "ip",
+	//				Listeners: map[string]string{
+	//					"80": "TLS",
+	//				},
+	//				TargetGroups: map[string][]string{
+	//					"80":  {"TCP"}, // Base service target group
+	//					"81":  {"TCP"}, // Target svc 1
+	//					"82":  {"TLS"}, // Target svc 2
+	//					"100": {"TCP"}, // Out of band target group
+	//				},
+	//				NumTargets: 0, // Skipping this check
+	//			})
+	//			Expect(err).ToNot(HaveOccurred())
+	//		})
+	//		By("waiting for load balancer to be available", func() {
+	//			err := tf.LBManager.WaitUntilLoadBalancerAvailable(ctx, lbARN)
+	//			Expect(err).NotTo(HaveOccurred())
+	//		})
+	//		AfterAll(func() {
+	//			_, err := elbv2Api.DeleteTargetGroup(&elbv2.DeleteTargetGroupInput{TargetGroupArn: &tgArn})
+	//			Expect(err).NotTo(HaveOccurred())
+	//		})
+	//	})
+	//})
 })

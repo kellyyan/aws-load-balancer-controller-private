@@ -136,7 +136,7 @@ var _ = Describe("test k8s alb gateway using ip targets reconciled by the aws lo
 					Protocol: gwv1.HTTPProtocolType,
 				},
 			}
-			
+
 			httpr := buildHTTPRoute([]string{}, httpRouteRuleWithMatchesAndTargetGroupWeights)
 			By("deploying stack", func() {
 				err := stack.Deploy(ctx, tf, gwListeners, []*gwv1.HTTPRoute{httpr}, lbcSpec, tgSpec)

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/pkg/errors"
@@ -532,6 +533,126 @@ func Test_shouldUseTCPUDP(t *testing.T) {
 			}
 			assert.Equal(t, tc.expected, task.shouldUseTCPUDP())
 
+		})
+	}
+}
+
+type result struct {
+	annotationExists bool
+	actionCfg        Action
+	error            error
+}
+
+func Test_defaultModelBuilderTask_buildActionConfigViaAnnotation(t *testing.T) {
+	baseServiceWeight := int32(20)
+	targetSvcName := "my-service"
+	targetSvcPort := intstr.FromInt32(100)
+	targetSvcWeight := int32(60)
+	tests := []struct {
+		testName       string
+		svc            *corev1.Service
+		svcAnnotations map[string]string
+		protocol       elbv2model.Protocol
+		port           int32
+		wantErr        error
+		wantValue      *result
+	}{
+		{
+			testName: "Parses actions annotation successfully",
+			svc: &corev1.Service{
+				Spec: corev1.ServiceSpec{
+					Type: corev1.ServiceTypeLoadBalancer,
+					Ports: []corev1.ServicePort{
+						{
+							Port:     81,
+							Protocol: corev1.ProtocolTCP,
+						},
+					},
+				},
+			},
+			svcAnnotations: map[string]string{
+				"service.beta.kubernetes.io/actions.TCP-81": fmt.Sprintf(`{"type": "forward", "forwardConfig": {"baseServiceWeight": 20, "targetGroups": [{"serviceName": "%v", "servicePort": 100, "weight": 60}]}}`, targetSvcName),
+			},
+			protocol: elbv2model.ProtocolTCP,
+			port:     81,
+			wantErr:  nil,
+			wantValue: &result{
+				annotationExists: true,
+				actionCfg: Action{
+					Type: ActionTypeForward,
+					ForwardConfig: &ForwardActionConfig{
+						BaseServiceWeight: &baseServiceWeight,
+						TargetGroups: []TargetGroupTuple{
+							{
+								ServiceName: &targetSvcName,
+								ServicePort: &targetSvcPort,
+								Weight:      &targetSvcWeight,
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			testName: "Actions annotation doesn't exist, skip it",
+			svc: &corev1.Service{
+				Spec: corev1.ServiceSpec{
+					Type: corev1.ServiceTypeLoadBalancer,
+					Ports: []corev1.ServicePort{
+						{
+							Port:     81,
+							Protocol: corev1.ProtocolTCP,
+						},
+					},
+				},
+			},
+			svcAnnotations: map[string]string{},
+			protocol:       elbv2model.ProtocolTCP,
+			port:           81,
+			wantErr:        nil,
+			wantValue: &result{
+				annotationExists: false,
+				actionCfg:        Action{},
+			},
+		},
+		{
+			testName: "Actions annotation exists, invalid base service weight",
+			svc: &corev1.Service{
+				Spec: corev1.ServiceSpec{
+					Type: corev1.ServiceTypeLoadBalancer,
+					Ports: []corev1.ServicePort{
+						{
+							Port:     81,
+							Protocol: corev1.ProtocolTCP,
+						},
+					},
+				},
+			},
+			svcAnnotations: map[string]string{
+				"service.beta.kubernetes.io/actions.TCP-81": fmt.Sprintf(`{"type": "forward", "forwardConfig": {"baseServiceWeight": 1000000, "targetGroups": [{"serviceName": "%v", "servicePort": 100, "weight": 60}]}}`, targetSvcName),
+			},
+			protocol: elbv2model.ProtocolTCP,
+			port:     81,
+			wantErr:  errors.New("invalid ForwardConfig: base service weight must be between 0 and 999"),
+			wantValue: &result{
+				annotationExists: true,
+				actionCfg:        Action{},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.testName, func(t *testing.T) {
+			parser := annotations.NewSuffixAnnotationParser("service.beta.kubernetes.io")
+			builder := &defaultModelBuildTask{
+				annotationParser: parser,
+				service:          tt.svc,
+			}
+			annotationExists, actionCfg, err := builder.buildActionConfigViaAnnotation(tt.svcAnnotations, tt.protocol, tt.port)
+			if tt.wantErr != nil {
+				assert.EqualError(t, err, tt.wantErr.Error())
+			} else {
+				assert.Equal(t, tt.wantValue, &result{annotationExists: annotationExists, actionCfg: actionCfg})
+			}
 		})
 	}
 }

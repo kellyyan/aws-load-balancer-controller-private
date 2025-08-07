@@ -12,10 +12,10 @@ import (
 	"strconv"
 )
 
-func NewResourceStack(dp *appsv1.Deployment, svc *corev1.Service, baseName string, enablePodReadinessGate bool) *resourceStack {
+func NewResourceStack(dp *appsv1.Deployment, svcs []*corev1.Service, baseName string, enablePodReadinessGate bool) *resourceStack {
 	return &resourceStack{
 		dp:                     dp,
-		svc:                    svc,
+		svcs:                   svcs,
 		baseName:               baseName,
 		enablePodReadinessGate: enablePodReadinessGate,
 	}
@@ -24,7 +24,7 @@ func NewResourceStack(dp *appsv1.Deployment, svc *corev1.Service, baseName strin
 // resourceStack containing the deployment and service resources
 type resourceStack struct {
 	// configurations
-	svc                    *corev1.Service
+	svcs                   []*corev1.Service // When creating multiple services, ensure first service is of type load balancer
 	dp                     *appsv1.Deployment
 	ns                     *corev1.Namespace
 	baseName               string
@@ -40,11 +40,13 @@ func (s *resourceStack) Deploy(ctx context.Context, f *framework.Framework) erro
 		return err
 	}
 	s.dp.Namespace = s.ns.Name
-	s.svc.Namespace = s.ns.Name
+	for _, svc := range s.svcs {
+		svc.Namespace = s.ns.Name
+	}
 	if err := s.createDeployment(ctx, f); err != nil {
 		return err
 	}
-	if err := s.createService(ctx, f); err != nil {
+	if err := s.createServices(ctx, f); err != nil {
 		return err
 	}
 	if err := s.waitUntilDeploymentReady(ctx, f); err != nil {
@@ -101,12 +103,6 @@ func (s *resourceStack) ScaleDeployment(ctx context.Context, f *framework.Framew
 }
 
 func (s *resourceStack) Cleanup(ctx context.Context, f *framework.Framework) error {
-	if err := s.deleteDeployment(ctx, f); err != nil {
-		return err
-	}
-	if err := s.deleteService(ctx, f); err != nil {
-		return err
-	}
 	if err := s.deleteNamespace(ctx, f); err != nil {
 		return err
 	}
@@ -118,7 +114,7 @@ func (s *resourceStack) GetLoadBalancerIngressHostname() string {
 }
 
 func (s *resourceStack) GetStackName() string {
-	return fmt.Sprintf("%v/%v", s.ns.Name, s.svc.Name)
+	return fmt.Sprintf("%v/%v", s.ns.Name, s.svcs[0].Name)
 }
 
 func (s *resourceStack) getListenersPortMap() map[string]string {
@@ -138,38 +134,38 @@ func (s *resourceStack) getTargetGroupNodePortMap() map[string][]string {
 }
 
 func (s *resourceStack) getHealthCheckNodePort() string {
-	return strconv.Itoa(int(s.svc.Spec.HealthCheckNodePort))
+	return strconv.Itoa(int(s.svcs[0].Spec.HealthCheckNodePort))
 }
 
 func (s *resourceStack) updateServiceTrafficPolicy(ctx context.Context, f *framework.Framework, trafficPolicy corev1.ServiceExternalTrafficPolicyType) error {
-	f.Logger.Info("updating service annotations", "svc", k8s.NamespacedName(s.svc))
-	oldSvc := s.svc.DeepCopy()
-	s.svc.Spec.ExternalTrafficPolicy = trafficPolicy
+	f.Logger.Info("updating service annotations", "svc", k8s.NamespacedName(s.svcs[0]))
+	oldSvc := s.svcs[0].DeepCopy()
+	s.svcs[0].Spec.ExternalTrafficPolicy = trafficPolicy
 	return s.updateService(ctx, f, oldSvc)
 }
 
 func (s *resourceStack) updateServiceAnnotations(ctx context.Context, f *framework.Framework, svcAnnotations map[string]string) error {
-	f.Logger.Info("updating service annotations", "svc", k8s.NamespacedName(s.svc))
-	oldSvc := s.svc.DeepCopy()
+	f.Logger.Info("updating service annotations", "svc", k8s.NamespacedName(s.svcs[0]))
+	oldSvc := s.svcs[0].DeepCopy()
 	for key, value := range svcAnnotations {
-		s.svc.Annotations[key] = value
+		s.svcs[0].Annotations[key] = value
 	}
 	return s.updateService(ctx, f, oldSvc)
 }
 
 func (s *resourceStack) removeServiceAnnotations(ctx context.Context, f *framework.Framework, annotationKeys []string) error {
-	f.Logger.Info("removing service annotations", "svc", k8s.NamespacedName(s.svc))
-	oldSvc := s.svc.DeepCopy()
+	f.Logger.Info("removing service annotations", "svc", k8s.NamespacedName(s.svcs[0]))
+	oldSvc := s.svcs[0].DeepCopy()
 	for _, key := range annotationKeys {
-		delete(s.svc.Annotations, key)
+		delete(s.svcs[0].Annotations, key)
 	}
 	return s.updateService(ctx, f, oldSvc)
 }
 
 func (s *resourceStack) updateService(ctx context.Context, f *framework.Framework, oldSvc *corev1.Service) error {
-	f.Logger.Info("updating service", "svc", k8s.NamespacedName(s.svc))
-	if err := f.K8sClient.Patch(ctx, s.svc, client.MergeFrom(oldSvc)); err != nil {
-		f.Logger.Info("failed to update service", "svc", k8s.NamespacedName(s.svc))
+	f.Logger.Info("updating service", "svc", k8s.NamespacedName(s.svcs[0]))
+	if err := f.K8sClient.Patch(ctx, s.svcs[0], client.MergeFrom(oldSvc)); err != nil {
+		f.Logger.Info("failed to update service", "svc", k8s.NamespacedName(s.svcs[0]))
 		return err
 	}
 	return nil
@@ -197,49 +193,31 @@ func (s *resourceStack) waitUntilDeploymentReady(ctx context.Context, f *framewo
 	return nil
 }
 
-func (s *resourceStack) createService(ctx context.Context, f *framework.Framework) error {
-	f.Logger.Info("creating service", "svc", k8s.NamespacedName(s.svc))
-	if err := f.K8sClient.Create(ctx, s.svc); err != nil {
-		return err
+func (s *resourceStack) createServices(ctx context.Context, f *framework.Framework) error {
+	f.Logger.Info("create all services")
+
+	for _, svc := range s.svcs {
+		f.Logger.Info("creating service", "svc", k8s.NamespacedName(svc))
+		svc = svc.DeepCopy()
+		if err := f.K8sClient.Create(ctx, svc); err != nil {
+			return err
+		}
+		if svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
+			s.createdSVC = svc
+		}
+		f.Logger.Info("created service", "svc", k8s.NamespacedName(svc))
 	}
+
 	return nil
 }
 
 func (s *resourceStack) waitUntilServiceReady(ctx context.Context, f *framework.Framework) error {
-	f.Logger.Info("waiting until service becomes ready", "svc", k8s.NamespacedName(s.svc))
-	observedSVC, err := f.SVCManager.WaitUntilServiceActive(ctx, s.svc)
+	f.Logger.Info("waiting for service of type load balancer to become ready", "svc", k8s.NamespacedName(s.createdSVC))
+	observedSVC, err := f.SVCManager.WaitUntilServiceActive(ctx, s.createdSVC)
 	if err != nil {
-		f.Logger.Info("failed waiting for service")
+		return err
 	}
 	s.createdSVC = observedSVC
-	return nil
-}
-
-func (s *resourceStack) deleteDeployment(ctx context.Context, f *framework.Framework) error {
-	f.Logger.Info("deleting deployment", "dp", k8s.NamespacedName(s.dp))
-	if err := f.K8sClient.Delete(ctx, s.dp); err != nil {
-		f.Logger.Info("failed to delete deployment", "dp", k8s.NamespacedName(s.dp))
-		return err
-	}
-	if err := f.DPManager.WaitUntilDeploymentDeleted(ctx, s.dp); err != nil {
-		f.Logger.Info("failed to wait for deployment deletion", "dp", k8s.NamespacedName(s.dp))
-		return err
-	}
-	f.Logger.Info("deleted deployment", "dp", k8s.NamespacedName(s.dp))
-	return nil
-}
-
-func (s *resourceStack) deleteService(ctx context.Context, f *framework.Framework) error {
-	f.Logger.Info("deleting service", "svc", k8s.NamespacedName(s.svc))
-	if err := f.K8sClient.Delete(ctx, s.svc); err != nil {
-		f.Logger.Info("failed to delete service", "svc", k8s.NamespacedName(s.svc))
-		return err
-	}
-	if err := f.SVCManager.WaitUntilServiceDeleted(ctx, s.svc); err != nil {
-		f.Logger.Info("failed to wait for service deletion", "svc", k8s.NamespacedName(s.svc))
-		return err
-	}
-	f.Logger.Info("deleted service", "svc", k8s.NamespacedName(s.svc))
 	return nil
 }
 

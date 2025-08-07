@@ -2,6 +2,7 @@ package verifier
 
 import (
 	"context"
+	"fmt"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/utils/strings/slices"
 	elbv2model "sigs.k8s.io/aws-load-balancer-controller/pkg/model/elbv2"
@@ -233,6 +234,7 @@ func VerifyLoadBalancerTargetGroups(ctx context.Context, f *framework.Framework,
 
 		err = VerifyTargetGroupHealthCheckConfig(tg, expected.TargetGroupHC)
 		Expect(err).NotTo(HaveOccurred())
+		//fmt.Println("target group health check config verified")
 		err = VerifyTargetGroupNumRegistered(ctx, f, awssdk.ToString(tg.TargetGroupArn), expected.NumTargets)
 		Expect(err).NotTo(HaveOccurred())
 	}
@@ -261,11 +263,15 @@ func VerifyTargetGroupNumRegistered(ctx context.Context, f *framework.Framework,
 	if expectedTargets == 0 {
 		return nil
 	}
+	fmt.Println("expectedTargets:", expectedTargets)
+	actualTargets := 0
 	Eventually(func() bool {
 		numTargets, err := f.TGManager.GetCurrentTargetCount(ctx, tgARN)
+		actualTargets = numTargets
 		Expect(err).ToNot(HaveOccurred())
 		return numTargets == expectedTargets
 	}, utils.PollTimeoutShort, utils.PollIntervalMedium).Should(BeTrue())
+	fmt.Println("actualTargets:", actualTargets)
 	return nil
 }
 

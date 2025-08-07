@@ -68,6 +68,10 @@ func InitFramework() (*Framework, error) {
 
 	logger, loggerReporter := utils.NewGinkgoLogger()
 
+	//AWSEndpoints: map[string]string{
+	//	"Elastic Load Balancing v2": "https://elasticloadbalancing-gamma.us-east-1.amazonaws.com/",
+	//}
+
 	cloud, err := aws.NewCloud(aws.CloudConfig{
 		Region:         globalOptions.AWSRegion,
 		VpcID:          globalOptions.AWSVPCID,
